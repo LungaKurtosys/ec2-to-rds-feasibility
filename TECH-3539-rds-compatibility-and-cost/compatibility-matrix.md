@@ -5,15 +5,20 @@
 
 ## Feature Compatibility
 
-| Feature | Used on EC2? | Supported on RDS? | Notes |
-|---|---|---|---|
-| SQL Agent Jobs | TBC | Partial — limited job types | No CmdExec, PowerShell, SSIS steps |
-| Linked Servers | TBC | No | Not supported on RDS for SQL Server |
-| CLR Assemblies | TBC | Partial — safe assemblies only | UNSAFE/EXTERNAL_ACCESS not allowed |
-| Cross-database queries | TBC | No | Single database per RDS instance |
-| Windows Authentication | TBC | No | SQL auth only on RDS |
-| Custom collation | TBC | Partial — set at instance creation only | Cannot change after provisioning |
-| FILESTREAM / FILETABLE | TBC | No | Not supported |
-| Database Mail | TBC | No | Not supported |
-| Backup to local disk | TBC | No | Backup to S3 only |
-| CHECKDB manual run | TBC | No | Managed automatically by RDS |
+Every feature identified in TECH-3538 will be assessed, including but not limited to:
+
+| Feature | Used on EC2 | RDS Support | Workaround Available | Impact if No Workaround |
+|---|---|---|---|---|
+| SQL Agent Jobs — T-SQL steps | TBC | Supported | N/A | None |
+| SQL Agent Jobs — CmdExec, PowerShell, SSIS | TBC | Not Supported | Lambda / Step Functions | Job redesign required |
+| Linked Servers | TBC | Not Supported | Application-level joins or ETL | Blocker if in use |
+| CLR — Safe assemblies | TBC | Supported | N/A | None |
+| CLR — External / Unsafe assemblies | TBC | Not Supported | Rewrite as T-SQL or Lambda | Blocker if in use |
+| Cross-database queries | TBC | Not Supported | Consolidate databases or use ETL | Blocker if in use |
+| Windows Authentication | TBC | Not Supported | SQL authentication | Service account changes required |
+| Database Mail | TBC | Not Supported | SNS / SES | Alerting redesign required |
+| FILESTREAM / FILETABLE | TBC | Not Supported | S3 | Blocker if in use |
+| Backup to local disk | TBC | Not Supported | S3 only | Process change required |
+| Custom collation | TBC | Supported at creation only | Set at provisioning time | Must confirm before provisioning |
+| CHECKDB manual run | TBC | Managed by RDS | N/A | No action needed |
+| Always On / Multi-AZ | TBC | Supported — RDS Multi-AZ | N/A | None |
