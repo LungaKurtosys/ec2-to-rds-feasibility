@@ -3,6 +3,7 @@
 
 > **Status:** In Progress
 > **Purpose:** Define the investigation scope, discovery approach, and definition of done for each child ticket before any investigation work begins.
+> **Last Updated:** 2026-07-23 — Discovery queries validated live on ew1r-mssql-01 (REL). Early findings documented below.
 
 ---
 
@@ -164,18 +165,82 @@ ORDER BY size DESC;
 
 ---
 
-## Open Questions — Before Investigation Starts
+---
 
-| # | Question | Why It Matters |
+## Instances in Scope
+
+| Instance | Environment | Region | Hostname | IP |
+|---|---|---|---|---|
+| ew1d-mssql-01 | DEV | Ireland (eu-west-1) | ew1d-mssql-01.dev.kurtosys-internal.net | 10.62.10.5 |
+| ew1r-mssql-01 | REL | Ireland (eu-west-1) | ew1r-mssql-01.gen-rel.kurtosys-internal.net | 10.79.22.22 |
+| ew2p-mssql-01 | PRD | London (eu-west-2) | ew2p-mssql-01.gen-prd.kurtosys-internal.net | 10.119.30.57 |
+| ew2p-mssql-02 | PRD | London (eu-west-2) | ew2p-mssql-02.gen-prd.kurtosys-internal.net | 10.119.37.228 |
+
+All instances are part of the InvestorPress_Encore workload. REL is the test environment — PRD (ew2p-mssql-01 and ew2p-mssql-02) are the primary migration targets.
+
+---
+
+## Assessment Summary — REL Instance (ew1r-mssql-01)
+
+> Discovery queries validated live on ew1r-mssql-01 on 2026-07-23. REL is a representative sample of what runs in production — same schema, same setup, lower risk. All queries confirmed working and ready to run on PRD.
+
+### Instance Basics
+
+| Property | Value | Notes |
 |---|---|---|
-| Q1 | How many SQL Server EC2 instances are in scope — full list with hostnames? | Cannot start inventory without knowing what to inventory |
-| Q2 | Which recent platform changes removed the historical blockers? | Theme A cannot assess blockers without knowing what changed |
-| Q3 | Who are the application/service owners for each instance? | Dependency mapping requires their input |
-| Q4 | Do we have access to all EC2 instances to run discovery queries directly? | Blocks all of Theme A |
-| Q5 | What is the current EC2 cost per instance — do we have Cost Explorer access? | Required for Theme B cost comparison |
-| Q6 | Are any instances using SQL Server features known to be unsupported on RDS (CLR, linked servers, agent jobs)? | Early signal for compatibility blockers |
-| Q7 | What SQL Server versions and editions are currently running across all instances? | Determines RDS engine version options |
-| Q8 | Is BYOL licensing already in place or are instances running License Included on EC2? | Required for licensing comparison in Theme B |
+| SQL Server Version | 2019 (15.0.4455.2) CU32 | RDS supports SQL Server 2019 ✅ |
+| Edition | Developer Edition | REL only — PRD will be Standard or Enterprise ⚠️ |
+| Collation | Latin1_General_CI_AS | Supported on RDS — must be set at provisioning time ✅ |
+| Always On | Enabled but not in use on REL | PRD has Always On active — RDS Multi-AZ will replace it ⚠️ |
+| Windows Auth Only | No — mixed auth | SQL logins exist — cleaner migration path ✅ |
+
+### Database Inventory
+
+- 32 user databases, ~342 GB total, all FULL recovery model
+- Compatibility levels: mostly 130 (SQL Server 2016 compat), some 150 (SQL Server 2019 compat)
+- Collation consistent across all databases except ReportServer and ReportServerTempDB which use `Latin1_General_100_CI_AS_KS_WS`
+
+### Early Findings — Blockers Identified
+
+| # | Finding | Blocker? | Proposed Solution |
+|---|---|---|---|
+| 1 | SSISDB present and actively running — SSIS_SFTP_Master.dtsx ran today, 4,413 successful runs | ❌ Hard blocker — SSIS not supported on RDS | Keep SSIS on a dedicated EC2 pointing at RDS, or rewrite as AWS Transfer Family + Lambda |
+| 2 | SSRS databases present — ReportServer and ReportServerTempDB | ❌ Blocker — SSRS not supported on RDS | Move SSRS to a separate EC2 or migrate to Power BI |
+| 3 | SQL Agent jobs use CmdExec and PowerShell steps — CHECKDB, ReIndex, backup jobs | ⚠️ Rework needed — not supported on RDS | Rewrite maintenance steps as T-SQL — backup jobs become redundant on RDS |
+| 4 | Windows logins in use — 6 Windows logins and 1 Windows group | ⚠️ Not supported on RDS | Convert to SQL logins or IAM authentication before migration |
+| 5 | UDM_MEM linked server (MemSQL) | ✅ Not a blocker — orphaned | Nothing references it — safe to drop |
+| 6 | CLR assemblies | ✅ Clean | None found |
+| 7 | Cross-database dependencies | ✅ Clean | Only dead references and query aliases — no real cross-database calls |
+| 8 | donovan.vangraan SQL login still active | ⚠️ Security — ex-employee | Disable immediately |
+
+### Executive Summary — What This Means
+
+A straight lift-and-shift of SQL Server from EC2 to RDS is not possible in its current state. Four blockers were identified on REL. None are showstoppers — all have clear solutions. The migration is feasible but requires a phased approach:
+
+- **Phase 1 — Resolve blockers:** Move SSIS to a dedicated EC2, move SSRS to a separate EC2 or Power BI, convert Windows logins to SQL logins, rewrite CmdExec/PowerShell Agent steps as T-SQL
+- **Phase 2 — Migrate databases to RDS:** Use native backup/restore, configure RDS Multi-AZ to replace Always On on PRD
+- **Phase 3 — Decommission old EC2 instances:** Once stable on RDS and all applications confirmed connecting to new endpoints
+
+### What Is Still Needed Before a Final Recommendation
+
+- PRD assessment not yet done — ew2p-mssql-01 and ew2p-mssql-02 must be assessed. REL is the test environment — PRD is what the business case depends on
+- Historical blockers not yet documented — what previously prevented this migration and what has changed must be confirmed with Platform Engineering before TECH-3537 can be closed
+- Cost comparison still to come — EC2 vs RDS cost per instance needed for TECH-3539
+
+---
+
+## Open Questions
+
+| # | Question | Why It Matters | Status |
+|---|---|---|---|
+| Q1 | How many SQL Server EC2 instances are in scope — full list with hostnames? | Cannot start inventory without knowing what to inventory | **Closed** — 4 instances confirmed, see Instances in Scope above |
+| Q2 | Which recent platform changes removed the historical blockers? | Theme A cannot assess blockers without knowing what changed | Open — needs Platform Engineering input |
+| Q3 | Who are the application/service owners for each instance? | Dependency mapping requires their input | Open |
+| Q4 | Do we have access to all EC2 instances to run discovery queries directly? | Blocks all of Theme A | **Closed** — access confirmed, queries validated on REL 2026-07-23 |
+| Q5 | What is the current EC2 cost per instance — do we have Cost Explorer access? | Required for Theme B cost comparison | Open — to be confirmed with billing team |
+| Q6 | Are any instances using SQL Server features known to be unsupported on RDS? | Early signal for compatibility blockers | **Closed** — SSIS, SSRS, CmdExec/PowerShell steps, Windows logins all identified on REL |
+| Q7 | What SQL Server versions and editions are currently running across all instances? | Determines RDS engine version options | **Partial** — REL confirmed SQL Server 2019 Developer Edition. PRD edition TBC |
+| Q8 | Is BYOL licensing already in place or are instances running License Included on EC2? | Required for licensing comparison in Theme B | Open |
 
 ---
 
