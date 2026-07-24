@@ -1,7 +1,7 @@
 # Theme B — RDS Compatibility and Cost Analysis
 # [TECH-3539](https://kurtosys-prod-eng.atlassian.net/jira/software/c/projects/TECH/boards/795?selectedIssue=TECH-3539)
 
-> **Status:** In Progress — PRD instance data confirmed 2026-07-23. Cost model populated. Feature compatibility assessment based on known PRD workload (InvestorPress_Encore, Always On). Remaining TBC items require direct PRD query access.
+> **Status:** In Progress — PRD instance data confirmed 2026-07-23. Cost model populated. Feature compatibility assessment based on known PRD workload (InvestorPress_Encore, Always On). Remaining TBC items resolved via OPENQUERY through EW1R-REP-01 linked servers — no direct PRD access required.
 > **Last Updated:** 2026-07-28
 
 ---
@@ -30,29 +30,29 @@ Using the inventory and dependency findings from TECH-3538, assess whether the S
 
 ## Feature Compatibility Matrix
 
-> Assessment basis: SQL Server 2019 Enterprise on EC2 → RDS for SQL Server. Features marked TBC require direct PRD query access to confirm whether they are in use.
+> Assessment basis: SQL Server 2019 Enterprise on EC2 → RDS for SQL Server. Features marked TBC are confirmed via OPENQUERY through EW1R-REP-01 linked servers (same approach used to confirm edition, instance type, and BYOL in TECH-3538).
 
 | Feature | In Use on EC2 | RDS Support | Workaround | Impact |
 |---|---|---|---|---|
 | SQL Agent Jobs — T-SQL steps | Yes — confirmed (EW1R-REP-01 monitors jobs) | ✅ Supported | N/A | None |
-| SQL Agent Jobs — CmdExec / PowerShell steps | TBC — requires direct PRD query | ❌ Not Supported | Lambda / Step Functions / SSM Run Command | Blocker if in use — job redesign required |
-| SQL Agent Jobs — SSIS steps | TBC | ❌ Not Supported | AWS Glue / SSIS on EC2 sidecar | Blocker if in use |
+| SQL Agent Jobs — CmdExec / PowerShell steps | TBC — Section 3 of prd-compatibility-queries.sql | ❌ Not Supported | Lambda / Step Functions / SSM Run Command | Blocker if in use — job redesign required |
+| SQL Agent Jobs — SSIS steps | TBC — Section 3 of prd-compatibility-queries.sql | ❌ Not Supported | AWS Glue / SSIS on EC2 sidecar | Blocker if in use |
 | Always On Availability Groups | Yes — primary/secondary confirmed | ✅ Supported via RDS Multi-AZ | Use RDS Multi-AZ deployment | None — RDS Multi-AZ replaces Always On |
-| Linked Servers | TBC — EW1R-REP-01 has linked servers to PRD; PRD-to-PRD linked servers unknown | ❌ Not Supported on RDS | Application-level joins or ETL pipeline | Blocker if PRD instances have outbound linked servers |
-| CLR — Safe assemblies | TBC | ✅ Supported | N/A | None if only Safe |
-| CLR — External / Unsafe assemblies | TBC | ❌ Not Supported | Rewrite as T-SQL or move to Lambda | Blocker if in use |
-| Cross-database queries | TBC — 32 databases on REL suggest likely on PRD too | ❌ Not Supported | Consolidate databases or use ETL | Blocker if in use — high likelihood given workload |
-| Windows Authentication / AD logins | TBC | ❌ Not Supported (standard RDS) | SQL auth or RDS Kerberos with AWS Managed AD | Service account changes required |
-| Database Mail | TBC | ❌ Not Supported | Amazon SNS / SES | Alerting redesign if in use |
-| FILESTREAM / FILETABLE | TBC | ❌ Not Supported | S3 | Blocker if in use |
-| SSRS (SQL Server Reporting Services) | TBC | ❌ Not Supported | Power BI / QuickSight / SSRS on separate EC2 | Blocker if in use |
+| Linked Servers | TBC — Section 4 of prd-compatibility-queries.sql | ❌ Not Supported on RDS | Application-level joins or ETL pipeline | Blocker if PRD instances have outbound linked servers |
+| CLR — Safe assemblies | TBC — Section 6 of prd-compatibility-queries.sql | ✅ Supported | N/A | None if only Safe |
+| CLR — External / Unsafe assemblies | TBC — Section 6 of prd-compatibility-queries.sql | ❌ Not Supported | Rewrite as T-SQL or move to Lambda | Blocker if in use |
+| Cross-database queries | TBC — Section 7 of prd-compatibility-queries.sql | ❌ Not Supported | Consolidate databases or use ETL | Blocker if in use — high likelihood given workload |
+| Windows Authentication / AD logins | TBC — Section 5 of prd-compatibility-queries.sql | ❌ Not Supported (standard RDS) | SQL auth or RDS Kerberos with AWS Managed AD | Service account changes required |
+| Database Mail | TBC — Section 8 of prd-compatibility-queries.sql | ❌ Not Supported | Amazon SNS / SES | Alerting redesign if in use |
+| FILESTREAM / FILETABLE | TBC — Section 9 of prd-compatibility-queries.sql | ❌ Not Supported | S3 | Blocker if in use |
+| SSRS (SQL Server Reporting Services) | TBC — confirm with application team | ❌ Not Supported | Power BI / QuickSight / SSRS on separate EC2 | Blocker if in use |
 | Backup to local disk | TBC | ❌ Not Supported | S3 only (native RDS backup) | Process change — not a blocker |
-| Custom collation | Latin1_General_CI_AS confirmed on REL — PRD TBC | ✅ Supported at DB creation | Must be set at provisioning time | Confirm PRD collation before provisioning |
+| Custom collation | Latin1_General_CI_AS confirmed on REL — PRD TBC — Section 1 of prd-compatibility-queries.sql | ✅ Supported at DB creation | Must be set at provisioning time | Confirm PRD collation before provisioning |
 | CHECKDB | Manual on EC2 | ✅ Managed by RDS automatically | N/A | Improvement — no action needed |
-| Transparent Data Encryption (TDE) | TBC | ✅ Supported | N/A | None |
+| Transparent Data Encryption (TDE) | TBC — Section 2 of prd-compatibility-queries.sql | ✅ Supported | N/A | None |
 | Data compression | TBC — Enterprise feature | ✅ Supported on RDS Enterprise | N/A | None |
 | Online index operations | TBC — Enterprise feature | ✅ Supported on RDS Enterprise | N/A | None |
-| Resource Governor | TBC | ❌ Not Supported on RDS | Workload management via instance sizing | Low impact unless actively used |
+| Resource Governor | TBC — low priority | ❌ Not Supported on RDS | Workload management via instance sizing | Low impact unless actively used |
 | SQL Server version (2019) | 2019 CU32 | ✅ RDS supports SQL Server 2019 | N/A | None |
 | Enterprise Edition on RDS | Required — BYOL only | ✅ Supported — BYOL only | N/A | BYOL confirmed — no blocker |
 
@@ -64,15 +64,15 @@ These are the features that are either confirmed blockers or high-likelihood blo
 
 | # | Blocker | Likelihood | Status | Action Required |
 |---|---|---|---|---|
-| 1 | Cross-database queries | High — 32 databases on REL, likely same on PRD | TBC — needs PRD query | Run cross-database dependency query on PRD |
-| 2 | Linked servers (PRD outbound) | Medium — EW1R-REP-01 has inbound links to PRD; PRD outbound unknown | TBC — needs PRD query | Query sys.servers on PRD |
-| 3 | Windows Authentication / AD logins | Medium — common in enterprise SQL Server | TBC — needs PRD query | Query sys.server_principals on PRD |
-| 4 | CmdExec / PowerShell SQL Agent steps | Medium | TBC — needs PRD query | Query msdb.dbo.sysjobsteps on PRD |
-| 5 | SSIS job steps | Low-Medium | TBC — needs PRD query | Query msdb.dbo.sysjobsteps on PRD |
-| 6 | CLR Unsafe/External assemblies | Low | TBC — needs PRD query | Query sys.assemblies on PRD |
-| 7 | SSRS | Low — no evidence of SSRS use | TBC | Confirm with application team |
+| 1 | Cross-database queries | High — 32 databases on REL, likely same on PRD | TBC — run Section 7 of prd-compatibility-queries.sql via EW1R-REP-01 | OPENQUERY([ew2p-mssql-01], sys.sql_expression_dependencies) |
+| 2 | Linked servers (PRD outbound) | Medium | TBC — run Section 4 of prd-compatibility-queries.sql via EW1R-REP-01 | OPENQUERY([ew2p-mssql-01], sys.servers) |
+| 3 | Windows Authentication / AD logins | Medium — common in enterprise SQL Server | TBC — run Section 5 of prd-compatibility-queries.sql via EW1R-REP-01 | OPENQUERY([ew2p-mssql-01], sys.server_principals) |
+| 4 | CmdExec / PowerShell SQL Agent steps | Medium | TBC — run Section 3 of prd-compatibility-queries.sql via EW1R-REP-01 | OPENQUERY([ew2p-mssql-01], msdb.dbo.sysjobsteps) |
+| 5 | SSIS job steps | Low-Medium | TBC — run Section 3 of prd-compatibility-queries.sql via EW1R-REP-01 | OPENQUERY([ew2p-mssql-01], msdb.dbo.sysjobsteps) |
+| 6 | CLR Unsafe/External assemblies | Low | TBC — run Section 6 of prd-compatibility-queries.sql via EW1R-REP-01 | OPENQUERY([ew2p-mssql-01], sys.assemblies) |
+| 7 | SSRS | Low — no evidence of SSRS use | TBC — confirm with application team | No query needed — stakeholder confirmation |
 
-> **Note:** None of these are confirmed hard blockers yet. All require direct PRD query access or stakeholder confirmation. The PRD database inventory queries (planned for this sprint) will resolve blockers 1–6.
+> **Note:** None of these are confirmed hard blockers yet. Blockers 1–6 are resolved by running prd-compatibility-queries.sql from EW1R-REP-01 — the same approach used to confirm BYOL, instance type, and edition in TECH-3538. No direct PRD access required.
 
 ---
 
@@ -154,7 +154,7 @@ To use existing licenses on RDS, AWS License Mobility must be formally activated
 - [x] Licensing analysis completed — BYOL confirmed, License Mobility noted
 - [x] Cost model populated — EC2 baseline confirmed, RDS estimate calculated, saving quantified
 - [x] RDS engine version support confirmed against current EC2 SQL Server version
-- [ ] Compatibility blockers 1–6 resolved via direct PRD query access
+- [ ] Compatibility blockers 1–6 resolved via OPENQUERY through EW1R-REP-01 linked servers
 - [ ] Cost model finalised — Nov 2025 cost change investigated and confirmed
 - [ ] AWS License Mobility activation status confirmed with manager
 - [ ] Exact RDS pricing confirmed via AWS Pricing Calculator
@@ -166,7 +166,7 @@ To use existing licenses on RDS, AWS License Mobility must be formally activated
 ## Dependencies
 
 - TECH-3538 complete — ✅ PRD instance data confirmed
-- Direct PRD query access — needed to resolve compatibility blockers 1–6
+- OPENQUERY via EW1R-REP-01 linked servers — to resolve compatibility blockers 1–6 (no direct PRD access needed)
 - Manager confirmation — AWS License Mobility activation status
 
 ---
