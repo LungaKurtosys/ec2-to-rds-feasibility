@@ -1,93 +1,131 @@
-# Theme C — Recommendation and Handover
+# Go / No-Go Recommendation
 # [TECH-3540](https://kurtosys-prod-eng.atlassian.net/jira/software/c/projects/TECH/boards/795?selectedIssue=TECH-3540)
 
-> **Status:** To Do — blocked on TECH-3538 and TECH-3539 completing first
+> **Status:** In Progress — all findings confirmed 2026-07-24 from live PRD queries via EW1R-REP-01
+> **Last Updated:** 2026-07-24
 
 ---
 
-## Purpose
+## Recommendation — GO with Conditions
 
-Using the findings from Theme A (TECH-3538) and Theme B (TECH-3539), produce the final go/no-go recommendation on whether migrating SQL Server from EC2 to Amazon RDS is viable. This ticket closes the feasibility assessment. No migration is executed here — this is the decision point only.
+**Migration from EC2 to RDS is viable. The recommendation is GO.**
 
----
-
-## Background
-
-TECH-3538 produced the full inventory of EC2 instances, dependency map, and historical blocker reassessment. TECH-3539 produced the feature compatibility matrix, licensing comparison, and cost model. This ticket takes both sets of findings and turns them into a single evidence-based recommendation that the manager can sign off on.
+Not everything can move at once — 18 out of 20 databases are clean and ready. 2 databases have a hard blocker that needs a decision before they can move. Everything else is solvable with preparation work.
 
 ---
 
-## This Ticket Delivers
+## Plain English Summary — For Your Briefing
 
-- Candidate migration approaches documented with downtime and cutover implications — native backup/restore and AWS DMS assessed, not executed
-- Risk register with mitigation notes covering every risk identified across Theme A and Theme B
-- Go/no-go recommendation written with evidence from both themes
-- Phased migration outline for a follow-on epic if the recommendation is go
-- Manager sign-off to close the feasibility assessment
+### What we were trying to find out
+We needed to know: can we move our SQL Server databases from the EC2 virtual machine they currently live on, to Amazon RDS — which is AWS's managed database service? And if yes, what would break, what would it cost, and how do we do it safely?
 
----
+### What we found
 
-## Candidate Migration Approaches
-
-For each approach, document what it involves, estimated downtime, complexity, and whether it is viable given the compatibility findings from TECH-3539:
-
-| Approach | Description | Estimated Downtime | Complexity | Viable |
-|---|---|---|---|---|
-| Native backup/restore | Back up from EC2, restore into RDS | Hours — depends on database size | Low | TBC |
-| AWS DMS | Continuous replication with minimal cutover window | Minutes — near zero downtime | High | TBC |
-| Snapshot and restore | EC2 snapshot converted to RDS-compatible format | Hours | Medium | TBC |
+**The server is running 20 databases totalling ~803 GB.** These are production databases serving real clients — names like TROWEPRICE, JUPITER, BROWNCAPITAL, SECURITYBENEFIT, RWC and others. The server runs in London (eu-west-2) with a primary node and a secondary node for high availability.
 
 ---
 
-## Risk Register Scope
+### Why most databases are safe to migrate
 
-Every risk identified across Theme A and Theme B documented with likelihood, impact, and mitigation:
+**18 out of 20 databases have no blockers.** Here is why they are safe:
 
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| Hidden feature dependency not supported on RDS | TBC | High | Full compatibility matrix from TECH-3539 |
-| Licensing cost higher than expected | TBC | Medium | BYOL vs License Included comparison from TECH-3539 |
-| Scope creep into execution | Low | High | Explicit out-of-scope list enforced at epic level |
-| Application downtime during cutover exceeds tolerance | TBC | High | Downtime assessment per approach from this ticket |
-| Historical blocker still applies after platform changes | TBC | High | Evidence-based reassessment from TECH-3538 |
+- **They use SQL logins** — this is important. A SQL login is a username and password stored inside SQL Server itself, like a local account on your laptop. The alternative is a Windows login, which is tied to the company's Active Directory (the same system you use to log into your work computer). RDS does not support Windows logins for applications. The good news is that all 51 application accounts on this server — the ones that applications use to connect to the database — are SQL logins. They will work on RDS exactly as they do today, no changes needed.
+
+- **No cross-database dependencies** — some databases talk to each other by name (e.g. a stored procedure in database A queries a table in database B). RDS does not support this because each RDS instance is isolated. We checked all 20 databases and found none of them do this. They are self-contained.
+
+- **No FILESTREAM** — FILESTREAM is a SQL Server feature that stores files (like PDFs or images) directly inside the database on the server's disk. RDS does not support this. We checked all 20 databases — none of them use it.
+
+- **No application-level linked servers** — a linked server is a connection from one SQL Server to another, allowing queries to span two servers. RDS does not support these. The only linked server on PRD points at MemSQL, which was decommissioned in May 2026. It is dead and will be dropped before migration.
+
+- **Maintenance jobs become redundant** — the server currently runs jobs to do backups, check database integrity (CHECKDB), and rebuild indexes. These jobs use CmdExec and PowerShell steps which RDS does not support. But this is not a problem — RDS does all of this automatically. These jobs are retired, not migrated.
 
 ---
 
-## Go/No-Go Recommendation Basis
+### Why 2 databases are blocked
 
-The recommendation will be based on:
+**SECURITYBENEFIT and RWC cannot move to RDS as-is.** Here is why:
 
-- Compatibility blockers from TECH-3539 — are they resolvable or hard blockers?
-- Cost comparison outcome — is RDS cheaper, comparable, or more expensive than EC2?
-- Historical blockers from TECH-3538 — removed or still active?
-- Risk profile — low, medium, or high overall?
+These two databases use something called **CLR assemblies** — these are small programs written in C# or .NET that run inside SQL Server to do things T-SQL cannot do natively, like sending emails or doing certain types of encryption. SQL Server has three safety levels for these programs: SAFE, EXTERNAL_ACCESS, and UNSAFE.
+
+RDS only allows SAFE assemblies. SECURITYBENEFIT and RWC both have **UNSAFE assemblies** — 25 each. The key ones are:
+- `EmailReportNotifications` — sends emails from inside the database
+- `SHA1StringFunction` — does SHA1 hashing (a type of encryption/fingerprinting)
+
+The rest are .NET framework libraries that were loaded as dependencies of those two.
+
+**Why UNSAFE is a hard blocker:** UNSAFE assemblies can access the server's operating system, memory, and network directly. AWS does not allow this on RDS because RDS is a shared managed service — one customer's code cannot be allowed to touch the underlying server. There are no exceptions to this rule.
+
+**The options for these two databases:**
+1. Rewrite `SHA1StringFunction` using T-SQL's built-in `HASHBYTES` function — low effort, T-SQL can do SHA1 natively
+2. Rewrite `EmailReportNotifications` to use Amazon SES instead — medium effort
+3. Leave SECURITYBENEFIT and RWC on EC2 and migrate everything else — valid if rewrite effort is too high right now
+
+---
+
+### Why SSRS needs to move first
+
+**SSRS (SQL Server Reporting Services)** is a reporting tool that runs on the same server as SQL Server. We confirmed it is installed — the ReportServer and ReportServerTempDB databases are present on the instance.
+
+RDS is a database-only service. It does not run SSRS or any other application alongside the database. Before we can migrate the SQL Server instance to RDS, SSRS needs to be moved to its own separate server first. The options are a separate EC2 instance running SSRS, or migrating reports to Power BI or Amazon QuickSight.
+
+---
+
+### Why Database Mail needs replacing
+
+**Database Mail** is how SQL Server sends email alerts — for example, when a backup fails or a job errors. We confirmed it is configured on PRD with a profile called `dba` sending from `dba@kurtosys.com`.
+
+RDS does not support Database Mail. Before migration, this needs to be replaced with **Amazon SES** (Simple Email Service) or **Amazon SNS** (Simple Notification Service) wired up to SQL Agent alerts. This is medium effort but straightforward.
+
+---
+
+### The cost case
+
+The server currently costs approximately **$4,110/month** for both nodes combined (confirmed from real AWS billing data on EW1R-REP-01). On RDS with BYOL (we own the licenses — confirmed), the equivalent would cost approximately **$2,000–$2,500/month** — a saving of **$1,600–$2,100/month**.
+
+**Why we own the licenses (BYOL):** BYOL stands for Bring Your Own License. It means Kurtosys purchased SQL Server Enterprise licenses directly from Microsoft. When you run on EC2 or RDS with BYOL, you only pay AWS for the compute and storage — the license cost does not appear on the AWS bill because you already paid Microsoft for it. We confirmed this from the AWS cost data — a line item called `LICENSE-EXEMPTION-KSYS-MSSQL-PASSIVE-NODE` appears on the secondary node. AWS only applies this exemption when a customer is running BYOL with active Software Assurance. This is the proof.
+
+One note: there was a cost drop on the primary node from ~$103/day to ~$9/day around October/November 2025. This needs to be confirmed — if the instance was legitimately resized, the current baseline is ~$1,245/month and the saving on RDS narrows to ~$0–$500/month. This must be clarified before presenting the cost case.
+
+---
+
+## Phased Migration Plan
+
+| Phase | What Happens | Why This Order |
+|---|---|---|
+| 1 — Pre-migration prep | Move SSRS off the instance. Replace Database Mail with SES/SNS. Drop dead linked server UDM_MEM. Replace Windows DBA logins with SQL logins on RDS. | These must be done before any database moves |
+| 2 — Migrate 18 clean databases | Native backup/restore from EC2 to RDS. Set collation to Latin1_General_CI_AS at provisioning. | Lowest risk — no blockers on these databases |
+| 3 — Decide on SECURITYBENEFIT and RWC | Either rewrite CLR assemblies and migrate, or leave on EC2 permanently | Depends on rewrite effort and business priority |
+| 4 — Decommission EC2 | Once all databases are migrated or accounted for, decommission the EC2 instances | Cannot happen until Phase 3 is resolved |
+
+---
+
+## What Needs Sign-Off at the Manager Meeting
+
+| Question | Why It Matters |
+|---|---|
+| Has AWS License Mobility been formally activated for RDS? | Administrative step — not a blocker, but must be initiated before migration begins |
+| What is the current cost of ew2p-mssql-01 — was it resized in Oct/Nov 2025? | Affects the cost saving calculation |
+| Who owns SECURITYBENEFIT and RWC — rewrite CLR or leave on EC2? | Determines whether Phase 3 is a rewrite project or a permanent split |
+| Who owns SSRS — move to EC2 or migrate to Power BI? | Determines Phase 1 effort and timeline |
 
 ---
 
 ## Definition of Done
 
-- [ ] Candidate migration approaches documented with downtime and cutover implications
-- [ ] Risk register completed with likelihood, impact, and mitigation per risk
-- [ ] Go/no-go recommendation written with evidence from TECH-3538 and TECH-3539
-- [ ] Phased migration outline written for follow-on epic if recommendation is go
-- [ ] migration-approaches.md published to Confluence
-- [ ] risk-register.md published to Confluence
-- [ ] go-no-go-recommendation.md published to Confluence
+- [x] Go/no-go recommendation written with evidence from TECH-3538 and TECH-3539
+- [x] Phased migration plan documented
+- [x] Plain English summary written for briefing
+- [ ] Migration approaches documented with downtime estimates — see migration-approaches.md
+- [ ] Risk register completed — see risk-register.md
 - [ ] Manager sign-off obtained
-- [ ] Epic TECH-3431 closure comment written with go-forward recommendation
-
----
-
-## Dependencies
-
-- Requires TECH-3538 and TECH-3539 both complete before starting
-- Cannot make a recommendation without the full inventory and compatibility findings
+- [ ] Epic TECH-3431 closure comment written
 
 ---
 
 ## Links
 
-- Parent epic: TECH-3431
-- Planning ticket: TECH-3537
-- Theme A — must complete before this: TECH-3538
-- Theme B — must complete before this: TECH-3539
+| Ticket | Description |
+|---|---|
+| [TECH-3431](https://kurtosys-prod-eng.atlassian.net/jira/software/c/projects/TECH/boards/795?selectedIssue=TECH-3431) | Parent epic |
+| [TECH-3538](https://kurtosys-prod-eng.atlassian.net/jira/software/c/projects/TECH/boards/795?selectedIssue=TECH-3538) | Theme A — inventory and dependency |
+| [TECH-3539](https://kurtosys-prod-eng.atlassian.net/jira/software/c/projects/TECH/boards/795?selectedIssue=TECH-3539) | Theme B — compatibility and cost |
